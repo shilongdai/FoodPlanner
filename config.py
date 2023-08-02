@@ -1,4 +1,6 @@
-API_KEY = "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"
+API_KEY_PATH = "./api_key"
+with open(API_KEY_PATH, "r") as fp:
+    API_KEY = fp.read().strip()
 THEME_TEMP = 0.3
 THEME_MODEL_OPENAI = "gpt-3.5-turbo"
 THEME_SYSTEM = "You are an experienced dietician and chief. " \
