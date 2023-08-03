@@ -1,5 +1,4 @@
 import json
-from urllib.parse import urlencode
 
 import streamlit as st
 from langchain.chat_models import ChatOpenAI
@@ -26,18 +25,22 @@ plan_llm = ChatOpenAI(openai_api_key=config.API_KEY, temperature=config.THEME_TE
 output_parser = PydanticOutputParser(pydantic_object=MealIdeaScheduleOutput)
 dietician = Dietician(planner_model=plan_llm, plan_parser=output_parser, plan_examples=load_examples())
 
+if "submitted" not in st.session_state:
+    st.session_state["submitted"] = False
 if "traits" not in st.session_state:
     st.session_state["traits"] = [""]
+planned = "plan" in st.session_state
+submitted = st.session_state["submitted"]
 
 with st.sidebar:
     st.write("## Your information")
-    height = st.number_input("Height (cm)", min_value=0)
-    weight = st.number_input("Weight (kg)", min_value=0)
+    height = st.number_input("Height (cm)", min_value=0, disabled=submitted)
+    weight = st.number_input("Weight (kg)", min_value=0, disabled=submitted)
     trait_1, trait_2 = st.columns(2)
     with trait_1:
         st.write("### Requirements")
     with trait_2:
-        add_btn = st.button("Add")
+        add_btn = st.button("Add", disabled=submitted)
     traits = st.session_state.traits
     if add_btn:
         traits.append("")
@@ -45,7 +48,7 @@ with st.sidebar:
         req_1, req_2 = st.columns([2.5, 1])
         with req_1:
             traits[i] = st.text_input(label="Requirement", key="trait_%d" % i, label_visibility="collapsed",
-                                      placeholder="Low carb", value=traits[i])
+                                      placeholder="Low carb", value=traits[i], disabled=submitted)
         with req_2:
             def del_trait():
                 trait_idx = int(i)
@@ -58,12 +61,31 @@ with st.sidebar:
                 return del_trait_func
 
 
-            remove_req = st.button("Remove", key="Remove_%d" % i, on_click=del_trait())
+            remove_req = st.button("🗑", key="Remove_%d" % i, on_click=del_trait(), disabled=submitted)
 
-    submit_btn = st.button("Submit", type="primary")
+    def submit_for_plan():
+        st.session_state["submitted"] = True
+
+    adjust_btn = False
+    if not submitted:
+        submit_btn = st.button("Submit", type="primary", on_click=submit_for_plan)
+    else:
+        reset_col, adjust_col = st.columns(2)
+
+        with reset_col:
+
+            def reset_plan():
+                st.session_state["submitted"] = False
+                del st.session_state["plan"]
+
+            st.button("Reset", on_click=reset_plan, disabled=not planned)
+        with adjust_col:
+            st.button("Adjust", disabled=not planned)
 
 
 def display_plan(plan):
+    if not plan:
+        return
     for d in plan.daily_plan:
         st.write("## " + d)
         meals = plan.daily_plan[d]
@@ -73,10 +95,17 @@ def display_plan(plan):
             st.write(m_idea.explanation)
 
 
-if submit_btn:
+st.write("# Meal Plan")
+if submitted and not planned:
     client_info = Client(height=height, weight=weight)
     client_info.dietary = list_to_markdown(st.session_state.traits)
-    st.write("# Meal Plan")
+
     with st.spinner("Planning..."):
         plan = dietician.plan_meal(client_info)
-    display_plan(plan)
+    st.session_state["plan"] = plan
+    st.experimental_rerun()
+
+if "plan" not in st.session_state:
+    st.write("Ready whenever you are")
+else:
+    display_plan(st.session_state["plan"])
