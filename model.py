@@ -2,6 +2,7 @@ import json
 from typing import List, Optional, Dict, Any, Tuple, Callable, Iterable
 
 import numpy as np
+from langchain import LLMChain
 from langchain.callbacks.manager import (
     AsyncCallbackManagerForChainRun,
     CallbackManagerForChainRun, get_openai_callback,
@@ -11,7 +12,7 @@ from langchain.chat_models import ChatOpenAI
 from langchain.chat_models.base import BaseChatModel
 from langchain.memory import ConversationBufferMemory, ConversationBufferWindowMemory
 from langchain.memory.chat_memory import BaseChatMemory
-from langchain.output_parsers import PydanticOutputParser
+from langchain.output_parsers import PydanticOutputParser, RetryWithErrorOutputParser
 from langchain.prompts import (
     ChatPromptTemplate,
     PromptTemplate,
@@ -19,7 +20,7 @@ from langchain.prompts import (
     HumanMessagePromptTemplate, )
 from langchain.prompts.base import BasePromptTemplate
 from langchain.prompts.example_selector.base import BaseExampleSelector
-from langchain.schema import BaseOutputParser, BaseMemory
+from langchain.schema import BaseOutputParser, BaseMemory, PromptValue
 from pydantic import BaseModel, Field, validator, Extra
 
 import config
@@ -29,10 +30,10 @@ misc_llm = ChatOpenAI(openai_api_key=config.API_KEY,
                       model_name=config.MISC_MODEL_OPENAI)
 
 
-class MealIdeaGPTView(BaseModel):
+class MealIdeaLLMOutput(BaseModel):
+    explanation: str = Field(description=config.THEME_MEAL_EXP)
     name: str = Field(description=config.THEME_MEAL_NAME_DESC)
     idea: str = Field(description=config.THEME_MEAL_IDEA_DESC)
-    explanation: str = Field(description=config.THEME_MEAL_EXP)
 
     @validator("name")
     def meal_name_valid(cls, field):
@@ -44,18 +45,78 @@ class MealIdeaGPTView(BaseModel):
 
 
 class MealIdeaScheduleOutput(BaseModel):
-    schedule: List[MealIdeaGPTView] = Field(description="Ideas for a day.", min_items=len(config.THEME_MEAL_NAME_VALID),
-                                            max_items=len(config.THEME_MEAL_NAME_VALID))
+    schedule: List[MealIdeaLLMOutput] = Field(description=config.THEME_MEAL_LIST,
+                                              min_items=len(config.THEME_MEAL_NAME_VALID),
+                                              max_items=len(config.THEME_MEAL_NAME_VALID))
+
+
+class Feedback:
+
+    def __init__(self, content, obj):
+        self.content = content
+        self.obj = obj
+
+
+class MealIdea:
+
+    def __init__(self, day, name, idea, explanation, feedback=""):
+        self.name = name
+        self.day = day
+        self.idea = idea
+        self.explanation = explanation
+        self.feedback = feedback
+
+    @classmethod
+    def from_llm(cls, day, llm_output):
+        return cls(day=day, name=llm_output.name, idea=llm_output.idea, explanation=llm_output.explanation)
+
+    @property
+    def all_feedbacks(self):
+        if len(self.feedback.strip()) > 0:
+            return [Feedback(content=self.feedback, obj=self)]
+        return []
+
+
+class MealPlan:
+
+    def __init__(self, daily_plan):
+        self.daily_plan = daily_plan
+
+    @property
+    def all_feedbacks(self):
+        result = []
+        for d in self.daily_plan.values():
+            for m in d.values():
+                result.extend(m.all_feedbacks)
+        return result
+
+
+class PromptAdoptingParser(BaseOutputParser):
+    base_parser: BaseOutputParser
+    prompt: PromptValue
+
+    def parse_with_prompt(self, completion: str, prompt_value: PromptValue):
+        return self.base_parser.parse_with_prompt(completion, prompt_value)
+
+    def parse(self, completion: str):
+        return self.parse_with_prompt(completion, self.prompt)
+
+    def get_format_instructions(self):
+        return self.base_parser.get_format_instructions()
 
 
 class DieticianPlanChain(Chain):
     system_prompt: BasePromptTemplate
     command_prompt: BasePromptTemplate
     user_prompt: BasePromptTemplate
+    format_prompt: BasePromptTemplate
+    format_cmd: BasePromptTemplate
     output_plan: str = "plan"
+    output_raw: str = "raw_plan"
     output_tokens: str = "tokens"
     user_profile: str = "profile"
     plan_llm: BaseChatModel
+    parse_llm: BaseChatModel
 
     class Config:
         extra = Extra.forbid
@@ -80,16 +141,27 @@ class DieticianPlanChain(Chain):
         """
         return [self.output_plan, self.output_tokens]
 
-    def predict(self, **inputs):
-        result = self(inputs=inputs, return_only_outputs=True)
+    def predict(self, callbacks=None, **inputs):
+        result = self(inputs=inputs, return_only_outputs=True, callbacks=callbacks)
         return result[self.output_plan], result[self.output_tokens]
 
-    def predict_with_parse(self, **inputs):
-        if not self.system_prompt.output_parser:
-            raise NotImplementedError("Need output parser in system prompt")
-        result, tokens = self.predict(**inputs)
-        return self.system_prompt.output_parser.parse_with_prompt(result,
-                                                                  self._generate_plan_messages(inputs)), tokens
+    def _format_idea(self, day_plan, run_manager: Optional[CallbackManagerForChainRun] = None):
+        if not self.format_prompt.output_parser:
+            raise NotImplementedError("Need output parser in parser prompt")
+        parse_prompt = self._format_prompt
+        parse_prompt_val = parse_prompt.format_prompt(raw_text=day_plan)
+        adopted_parser = PromptAdoptingParser(base_parser=self.format_prompt.output_parser, prompt=parse_prompt_val)
+        parse_chain = LLMChain(prompt=parse_prompt, llm=self.parse_llm, output_parser=adopted_parser,
+                               verbose=self.verbose)
+        return parse_chain.predict(callbacks=run_manager.get_child() if run_manager else None, raw_text=day_plan)
+
+    @property
+    def _format_prompt(self):
+        parse_system_template = SystemMessagePromptTemplate(prompt=self.format_prompt.partial(
+            format_instruction=self.format_prompt.output_parser.get_format_instructions()))
+        parse_human_template = HumanMessagePromptTemplate(prompt=self.format_cmd)
+        parse_chat_template = ChatPromptTemplate.from_messages([parse_system_template, parse_human_template])
+        return parse_chat_template
 
     def _call(
             self,
@@ -107,7 +179,9 @@ class DieticianPlanChain(Chain):
         if self.verbose:
             if run_manager:
                 run_manager.on_text("\nTotal Tokens: %d\n" % cb.total_tokens)
-        return {self.output_plan: msg_out.generations[0][0].text, self.output_tokens: cb.total_tokens}
+        return {self.output_plan: self._format_idea(msg_out.generations[0][0].text, run_manager),
+                self.output_raw: msg_out.generations[0][0].text,
+                self.output_tokens: cb.total_tokens}
 
     async def _acall(
             self,
@@ -125,7 +199,9 @@ class DieticianPlanChain(Chain):
         if self.verbose:
             if run_manager:
                 await run_manager.on_text("\nTotal Tokens: %d\n" % cb.total_tokens)
-        return {self.output_plan: msg_out.generations[0][0].text, self.output_tokens: cb.total_tokens}
+        return {self.output_plan: self._format_idea(msg_out.generations[0][0].text, run_manager),
+                self.output_raw: msg_out.generations[0][0].text,
+                self.output_tokens: cb.total_tokens}
 
     def _generate_plan_messages(self, inputs, run_manager=None):
         if "history" in inputs:
@@ -223,51 +299,6 @@ class PermanentTempMemory(BaseMemory, BaseModel):
         self.temp_mem.save_context(inputs, outputs)
 
 
-class Feedback:
-
-    def __init__(self, content, obj):
-        self.content = content
-        self.obj = obj
-
-
-class MealIdea:
-
-    def __init__(self, day, name, idea, explanation, feedback=""):
-        self.name = name
-        self.day = day
-        self.idea = idea
-        self.explanation = explanation
-        self.feedback = feedback
-
-    @staticmethod
-    def from_view(day, view):
-        return MealIdea(day=day, name=view.name, idea=view.idea, explanation=view.explanation)
-
-    @property
-    def view(self):
-        return MealIdeaGPTView(name=self.name, idea=self.idea, explanation=self.explanation)
-
-    @property
-    def all_feedbacks(self):
-        if len(self.feedback.strip()) > 0:
-            return [Feedback(content=self.feedback, obj=self)]
-        return []
-
-
-class MealPlan:
-
-    def __init__(self, daily_plan):
-        self.daily_plan = daily_plan
-
-    @property
-    def all_feedbacks(self):
-        result = []
-        for d in self.daily_plan.values():
-            for m in d.values():
-                result.extend(m.all_feedbacks)
-        return result
-
-
 def list_to_markdown(l: Iterable[str]):
     result = ""
     result_template = "- %s\n"
@@ -297,12 +328,48 @@ def format_target(feedback):
     return config.TARGET_IDEA_TEMP.format(name=idea.name, day=idea.day)
 
 
+def create_planner_chain(plan_model, parse_model, memory_base):
+    output_parser = RetryWithErrorOutputParser.from_llm(
+        parser=PydanticOutputParser(pydantic_object=MealIdeaScheduleOutput),
+        llm=parse_model)
+    system_template = PromptTemplate.from_template(config.THEME_SYSTEM)
+    commmand_template = PromptTemplate.from_template(config.THEME_COMMAND)
+    client_template = PromptTemplate.from_template(config.CLIENT_PROFILE_SYSTEM)
+    format_system = PromptTemplate.from_template(config.THEME_PARSE_SYSTEM, output_parser=output_parser)
+    format_cmd = PromptTemplate.from_template(config.THEME_PARSE_USER)
+
+    temp_memory = KeyValueMemory(base_chat_mem=memory_base, input_prompt=commmand_template,
+                                 output_prompt=PromptTemplate.from_template("{raw_plan}"))
+    perm_memory = ConversationBufferMemory(return_messages=True)
+    memory = PermanentTempMemory(perm_mem=perm_memory, temp_mem=temp_memory, merger=lambda k, v1, v2: v1 + v2)
+    plan_chain = DieticianPlanChain(system_prompt=system_template, command_prompt=commmand_template,
+                                    user_prompt=client_template, plan_llm=plan_model, memory=memory,
+                                    format_prompt=format_system, format_cmd=format_cmd, parse_llm=parse_model,
+                                    verbose=True)
+    return plan_chain
+
+
+def create_adjuster_chain(plan_model, parse_model):
+    output_parser = RetryWithErrorOutputParser.from_llm(
+        parser=PydanticOutputParser(pydantic_object=MealIdeaLLMOutput),
+        llm=parse_model)
+    system_template = PromptTemplate.from_template(config.ADJUST_SYSTEM)
+    commmand_template = PromptTemplate.from_template(config.ADJUST_COMMAND)
+    client_template = PromptTemplate.from_template(config.CLIENT_PROFILE_SYSTEM)
+    format_system = PromptTemplate.from_template(config.THEME_PARSE_SYSTEM, output_parser=output_parser)
+    format_cmd = PromptTemplate.from_template(config.THEME_PARSE_USER)
+    chain = DieticianPlanChain(system_prompt=system_template, command_prompt=commmand_template,
+                               user_prompt=client_template, plan_llm=plan_model,
+                               format_prompt=format_system, format_cmd=format_cmd, parse_llm=parse_model,
+                               verbose=True)
+    return chain
+
+
 class Dietician:
 
-    def __init__(self, planner_model: BaseChatModel, plan_parser: BaseOutputParser,
+    def __init__(self, planner_model: BaseChatModel,
                  plan_examples: BaseExampleSelector):
         self.planner_model = planner_model
-        self.plan_parser = plan_parser
         self.plan_examples = plan_examples
 
     def plan_meal(self, client_info: Client):
@@ -313,8 +380,8 @@ class Dietician:
 
         for d in days:
             input_dict = {"day": d, chain.user_profile: client_info}
-            output, tokens = chain.predict_with_parse(**input_dict)
-            daily_dict = {s.name: MealIdea.from_view(d, s) for s in
+            output, tokens = chain.predict(**input_dict)
+            daily_dict = {s.name: MealIdea.from_llm(d, s) for s in
                           output.schedule}
             daily_plan[d] = daily_dict
 
@@ -326,62 +393,58 @@ class Dietician:
         for f in plan.all_feedbacks:
             input_dict = {"orig_plan": format_ideas(plan.daily_plan), chain.user_profile: client_info,
                           "target": format_target(f), "feedback": f.content}
-            output, tokens = chain.predict_with_parse(**input_dict)
-            result.daily_plan[f.obj.day] = {s.name: MealIdea.from_view(d, s) for s in
-                                            output.schedule}
+            output, tokens = chain.predict(**input_dict)
+            result.daily_plan[f.obj.day][output.name] = MealIdea.from_llm(f.obj.day, output)
         return result
 
     def _prepare_plan_chain(self):
-        system_template = PromptTemplate.from_template(config.THEME_SYSTEM, output_parser=self.plan_parser).partial(
-            format_instructions=self.plan_parser.get_format_instructions())
-        commmand_template = PromptTemplate.from_template(config.THEME_COMMAND)
-        client_template = PromptTemplate.from_template(config.CLIENT_PROFILE_SYSTEM)
         memory_base = ConversationBufferWindowMemory(k=config.THEME_HISTORY,
                                                      return_messages=True)
-        temp_memory = KeyValueMemory(base_chat_mem=memory_base, input_prompt=commmand_template,
-                                     output_prompt=PromptTemplate.from_template("{plan}"))
-        perm_memory = ConversationBufferMemory(return_messages=True)
-        for e in self.plan_examples.select_examples({}):
-            perm_memory.save_context(
-                {"daily_instruction": e["input"]},
-                {"plan": e["output"]}
-            )
-        memory = PermanentTempMemory(perm_mem=perm_memory, temp_mem=temp_memory, merger=lambda k, v1, v2: v1 + v2)
-        plan_chain = DieticianPlanChain(system_prompt=system_template, command_prompt=commmand_template,
-                                        user_prompt=client_template, plan_llm=self.planner_model, memory=memory,
-                                        verbose=True)
-
+        # for e in self.plan_examples.select_examples({}):
+        #     perm_memory.save_context(
+        #         {"daily_instruction": e["input"]},
+        #         {"plan": e["output"]}
+        #     )
+        plan_chain = create_planner_chain(self.planner_model, misc_llm, memory_base)
         return plan_chain
 
     def _prepare_adjust_chain(self):
-        system_template = PromptTemplate.from_template(config.ADJUST_SYSTEM, output_parser=self.plan_parser).partial(
-            format_instructions=self.plan_parser.get_format_instructions())
-        commmand_template = PromptTemplate.from_template(config.ADJUST_COMMAND)
-        client_template = PromptTemplate.from_template(config.CLIENT_PROFILE_SYSTEM)
-        adj_chain = DieticianPlanChain(system_prompt=system_template, command_prompt=commmand_template,
-                                       user_prompt=client_template, plan_llm=self.planner_model,
-                                       verbose=True)
-        return adj_chain
+        return create_adjuster_chain(self.planner_model, misc_llm)
 
 
 if __name__ == "__main__":
-    plan_llm = ChatOpenAI(openai_api_key=config.API_KEY, temperature=config.THEME_TEMP,
-                          model_name=config.THEME_MODEL_OPENAI)
-    output_parser = PydanticOutputParser(pydantic_object=MealIdeaScheduleOutput)
 
-    example_selector = RandomExampleSelector(examples=[])
-    with open("data/themes.json", "r") as fp:
-        example_dicts = json.load(fp)
-        for d in example_dicts:
-            example_selector.add_example(
-                {"input": "For a day as an example without considering client information and explanation.",
-                 "output": json.dumps(d)})
+    def test_chain():
+        plan_llm = ChatOpenAI(openai_api_key=config.API_KEY, temperature=config.THEME_TEMP,
+                              model_name=config.THEME_MODEL_OPENAI)
+        memory_base = ConversationBufferWindowMemory(k=config.THEME_HISTORY,
+                                                     return_messages=True)
+        plan_chain = create_planner_chain(plan_llm, misc_llm, memory_base)
+        profile = Client(weight=68, height=170)
+        for d in ["Monday", "Tuesday", "Wednesday"]:
+            print(plan_chain.predict(**{"day": d, plan_chain.user_profile: profile}))
 
-    dietician = Dietician(planner_model=plan_llm, plan_parser=output_parser, plan_examples=example_selector)
-    client_info = Client(height=175, weight=62.6)
-    client_info.dietary = list_to_markdown(["Vegan", "Gluten Intolerance"])
-    plan = dietician.plan_meal(client_info)
-    print(format_ideas(plan.daily_plan))
-    plan.daily_plan["Monday"]["breakfast"].feedback = "I want some fusion food"
-    adj_plan = dietician.adjust_plan(client_info, plan)
-    print(format_ideas(adj_plan.daily_plan))
+
+    def test_dietician():
+        plan_llm = ChatOpenAI(openai_api_key=config.API_KEY, temperature=config.THEME_TEMP,
+                              model_name=config.THEME_MODEL_OPENAI)
+
+        example_selector = RandomExampleSelector(examples=[])
+        with open("data/themes.json", "r") as fp:
+            example_dicts = json.load(fp)
+            for d in example_dicts:
+                example_selector.add_example(
+                    {"input": "For a day as an example without considering client information and explanation.",
+                     "output": json.dumps(d)})
+
+        dietician = Dietician(planner_model=plan_llm, plan_examples=example_selector)
+        client_info = Client(height=175, weight=62.6)
+        client_info.dietary = list_to_markdown(["Vegan", "Gluten Intolerance"])
+        plan = dietician.plan_meal(client_info)
+        print(format_ideas(plan.daily_plan))
+        plan.daily_plan["Monday"]["breakfast"].feedback = "I want some fusion food"
+        adj_plan = dietician.adjust_plan(client_info, plan)
+        print(format_ideas(adj_plan.daily_plan))
+
+
+    test_dietician()

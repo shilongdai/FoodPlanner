@@ -1,5 +1,5 @@
 import sys
-from model import MealIdeaGPTView
+from model import MealIdeaLLMOutput
 from model import MealIdeaScheduleOutput
 import json
 import config
@@ -16,7 +16,7 @@ if __name__ == "__main__":
             if idea.strip() == ".":
                 finished = True
                 break
-            plan.schedule.append(MealIdeaGPTView(meal_name=m, meal_idea=idea))
+            plan.schedule.append(MealIdeaLLMOutput(meal_name=m, meal_idea=idea))
         if finished:
             break
         result.append(plan.dict())
