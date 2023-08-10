@@ -12,7 +12,7 @@ THEME_SYSTEM = "You are an experienced dietician and chief. " \
                "When coming up with the ideas, for each meal, show your step by step thought process. " \
                "The thought process should be sufficient to serve as the proof for why the idea is appropriate. " \
                "Then, conclude with the final idea for the meal after the thought process. "
-THEME_COMMAND = "Come up with the breakfast, lunch, and dinner ideas for {day}. "\
+THEME_COMMAND = "Come up with the breakfast, lunch, and dinner ideas for {day}. " \
                 "Tailor the plan to the profile of the client. "
 THEME_EXAMPLES = "./data/themes.json"
 THEME_MEAL_NAME_DESC = "The name of the meal. Can be one of breakfast, lunch, or dinner."
@@ -26,11 +26,12 @@ THEME_HISTORY = 2
 
 THEME_PARSE_SYSTEM = "You are an AI assistant tasked with converting description of meal plans into machine readable format.\n\n" \
                      "{format_instruction}"
-THEME_PARSE_USER = "Translate according to the format instructions. "\
+THEME_PARSE_USER = "Translate according to the format instructions. " \
                    "Do not come up with anything new. Use only information provided.\n\n{raw_text}"
 
 CLIENT_PROFILE_SYSTEM = "The client has the following profile and description:\n" \
-                        "Height: {height} cm\nWeight: {weight} kg\nActivity Level:\n{activity}\n" \
+                        "Daily caloric goal: {calories} cal\nCarbohydrate goal: {carbs}g\nProtein goal: {proteins}g\n" \
+                        "Fat goal: {fat}g\n" \
                         "Dietary Considerations:\n{dietary}"
 
 ADJUST_SYSTEM = "You are an experienced dietician and chief. " \
@@ -48,6 +49,30 @@ ADJUST_COMMAND = "The original plan:\n{orig_plan}\n\n" \
                  "Propose the adjusted version given the feedback."
 ADJUST_MEAL_PLAN_TEMP = "Day: {day}\nMeal: {name}\nIdea: {idea}\nExplanation: {explanation}\n\n"
 TARGET_IDEA_TEMP = "{name} on {day}"
+
+RECIPE_SUGGEST_SYSTEM = "You are an experienced dietician and chief. " \
+                        "Your goal is to create a meal plan for a client on a day to day basis. " \
+                        "To create the plan, you came up with up the general idea for the breakfast, lunch, and dinner for the week. " \
+                        "Thus, for each of the ideas, you will think of possible recipes that will fit the meal idea. " \
+                        "Do not come up with a recipe on your own, only make some estimation about possible recipes created by others. " \
+                        "Only provide the expected name, calorie count, carbohydrate count in grams, fat count in grams, and protein count in grams for each recipes required for the meal. " \
+                        "The recipes should be easy to find in resources such as the internet, cookbooks etc. " \
+                        "Thus, they should not be excessively obscure or specific so that the chance of finding the exact recipe is low. " \
+                        "Show your step by step thought process for how you came up with the name, calories, and nutrition information. " \
+                        "The thought process should be sufficient to serve as the proof for the accuracy of the recipe information. " \
+                        "Then, after providing the thought process, conclude with the final answer. " \
+                        "The final answer should contain pure numerical expected values of the estimates with appropriate units. "
+
+RECIPE_BUDGET_SYSTEM = "The client has the following caloric and macro-nutrient budget left for the day:\n" \
+                       "Calories: {calories} cal\nCarbohydrate: {carbs}g\nProteins: {proteins}g\n" \
+                       "Fat: {fat}g\n\n" \
+                       "The client has the following dietary considerations:\n{dietary}"
+RECIPE_SUGGEST_COMMAND = "Come up with the expected recipes for making the dishes for the following meal idea:\nName: {meal_name}\n" \
+                         "Explanation: {meal_explanation}"
+
+RECIPE_SEARCH_SYSTEM = "You are an AI Assistant tasked with helping a human to find recipes. " \
+                       "All of the available recipes are located in a database that can be searched via the name of the recipe. " \
+                       "The database will return recipes with names semantically similar to the input query. "
 
 MISC_TEMP = 0
 MISC_MODEL_OPENAI = "gpt-3.5-turbo"

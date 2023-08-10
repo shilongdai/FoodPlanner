@@ -20,7 +20,7 @@ from langchain.prompts import (
     HumanMessagePromptTemplate, )
 from langchain.prompts.base import BasePromptTemplate
 from langchain.prompts.example_selector.base import BaseExampleSelector
-from langchain.schema import BaseOutputParser, BaseMemory, PromptValue
+from langchain.schema import BaseOutputParser, BaseMemory, PromptValue, NoOpOutputParser
 from pydantic import BaseModel, Field, validator, Extra
 
 import config
@@ -147,7 +147,11 @@ class DieticianPlanChain(Chain):
 
     def _format_idea(self, day_plan, run_manager: Optional[CallbackManagerForChainRun] = None):
         if not self.format_prompt.output_parser:
-            raise NotImplementedError("Need output parser in parser prompt")
+            return day_plan
+        try:
+            self.format_prompt.output_parser.get_format_instructions()
+        except NotImplementedError:
+            return day_plan
         parse_prompt = self._format_prompt
         parse_prompt_val = parse_prompt.format_prompt(raw_text=day_plan)
         adopted_parser = PromptAdoptingParser(base_parser=self.format_prompt.output_parser, prompt=parse_prompt_val)
@@ -157,8 +161,16 @@ class DieticianPlanChain(Chain):
 
     @property
     def _format_prompt(self):
-        parse_system_template = SystemMessagePromptTemplate(prompt=self.format_prompt.partial(
-            format_instruction=self.format_prompt.output_parser.get_format_instructions()))
+        base_system = self.format_prompt
+        try:
+            if "format_instruction" in base_system.input_variables:
+                base_system = base_system.partial(
+                    format_instruction=self.format_prompt.output_parser.get_format_instructions())
+        except NotImplementedError:
+            if "format_instruction" in base_system.input_variables:
+                base_system = base_system.partial(
+                    format_instruction="")
+        parse_system_template = SystemMessagePromptTemplate(prompt=base_system)
         parse_human_template = HumanMessagePromptTemplate(prompt=self.format_cmd)
         parse_chat_template = ChatPromptTemplate.from_messages([parse_system_template, parse_human_template])
         return parse_chat_template
@@ -308,8 +320,10 @@ def list_to_markdown(l: Iterable[str]):
 
 
 class Client(BaseModel):
-    weight: float
-    height: float
+    calories: float
+    carbs: float
+    fat: float
+    proteins: float
     activity: str = ""
     dietary: str = ""
 
@@ -356,6 +370,20 @@ def create_adjuster_chain(plan_model, parse_model):
     system_template = PromptTemplate.from_template(config.ADJUST_SYSTEM)
     commmand_template = PromptTemplate.from_template(config.ADJUST_COMMAND)
     client_template = PromptTemplate.from_template(config.CLIENT_PROFILE_SYSTEM)
+    format_system = PromptTemplate.from_template(config.THEME_PARSE_SYSTEM, output_parser=output_parser)
+    format_cmd = PromptTemplate.from_template(config.THEME_PARSE_USER)
+    chain = DieticianPlanChain(system_prompt=system_template, command_prompt=commmand_template,
+                               user_prompt=client_template, plan_llm=plan_model,
+                               format_prompt=format_system, format_cmd=format_cmd, parse_llm=parse_model,
+                               verbose=True)
+    return chain
+
+
+def create_recipe_suggest_chain(plan_model, parse_model):
+    output_parser = NoOpOutputParser()
+    system_template = PromptTemplate.from_template(config.RECIPE_SUGGEST_SYSTEM)
+    commmand_template = PromptTemplate.from_template(config.RECIPE_SUGGEST_COMMAND)
+    client_template = PromptTemplate.from_template(config.RECIPE_BUDGET_SYSTEM)
     format_system = PromptTemplate.from_template(config.THEME_PARSE_SYSTEM, output_parser=output_parser)
     format_cmd = PromptTemplate.from_template(config.THEME_PARSE_USER)
     chain = DieticianPlanChain(system_prompt=system_template, command_prompt=commmand_template,
@@ -420,9 +448,26 @@ if __name__ == "__main__":
         memory_base = ConversationBufferWindowMemory(k=config.THEME_HISTORY,
                                                      return_messages=True)
         plan_chain = create_planner_chain(plan_llm, misc_llm, memory_base)
-        profile = Client(weight=68, height=170)
+        profile = Client(calories=2537, carbs=158, proteins=191, fat=127)
         for d in ["Monday", "Tuesday", "Wednesday"]:
-            print(plan_chain.predict(**{"day": d, plan_chain.user_profile: profile}))
+            print(plan_chain.predict(**{"day": d, plan_chain.user_profile: profile})[0])
+
+
+    def test_recipe_suggest():
+        plan_llm = ChatOpenAI(openai_api_key=config.API_KEY, temperature=config.THEME_TEMP,
+                              model_name=config.THEME_MODEL_OPENAI)
+        plan_chain = create_recipe_suggest_chain(plan_llm, misc_llm)
+        profile = Client(calories=2537, carbs=158, proteins=191, fat=127)
+        meal_name = "Vegan roasted vegetable and chickpea pasta with a tomato-based sauce"
+        explanation = "This dinner idea is a good fit for the meal specified in the name of the meal. It includes " \
+                      "complex carbohydrates from pasta, protein from chickpeas, and healthy fats from roasted " \
+                      "vegetables and sauce."
+        input_dict = {
+            "meal_name": meal_name,
+            "meal_explanation": explanation,
+            plan_chain.user_profile: profile
+        }
+        print(plan_chain.predict(**input_dict)[0])
 
 
     def test_dietician():
@@ -438,7 +483,7 @@ if __name__ == "__main__":
                      "output": json.dumps(d)})
 
         dietician = Dietician(planner_model=plan_llm, plan_examples=example_selector)
-        client_info = Client(height=175, weight=62.6)
+        client_info = Client(calories=2537, carbs=158, proteins=191, fat=127)
         client_info.dietary = list_to_markdown(["Vegan", "Gluten Intolerance"])
         plan = dietician.plan_meal(client_info)
         print(format_ideas(plan.daily_plan))
@@ -447,4 +492,4 @@ if __name__ == "__main__":
         print(format_ideas(adj_plan.daily_plan))
 
 
-    test_dietician()
+    test_recipe_suggest()

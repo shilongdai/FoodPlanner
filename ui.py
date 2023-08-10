@@ -52,8 +52,10 @@ def disable_feedbacks():
 
 def create_input_section():
     st.write("## Your information")
-    height = st.number_input("Height (cm)", min_value=0, disabled=submitted)
-    weight = st.number_input("Weight (kg)", min_value=0, disabled=submitted)
+    calories = st.number_input("Calories per day", min_value=0, disabled=submitted)
+    carbs = st.number_input("Carbs (g)", min_value=0, disabled=submitted)
+    proteins = st.number_input("Proteins (g)", min_value=0, disabled=submitted)
+    fats = st.number_input("Fats (g)", min_value=0, disabled=submitted)
     trait_1, trait_2 = st.columns(2)
     with trait_1:
         st.write("### Requirements")
@@ -79,11 +81,11 @@ def create_input_section():
                 return del_trait_func
 
             st.button("🗑", key="Remove_%d" % i, on_click=del_trait(), disabled=submitted)
-    return height, weight
+    return Client(calories=calories, carbs=carbs, proteins=proteins, fat=fats)
 
 
 with st.sidebar:
-    height, weight = create_input_section()
+    base_profile = create_input_section()
     if not submitted:
         submit_btn = st.button("Submit", type="primary", on_click=submit_for_plan)
     else:
@@ -132,11 +134,10 @@ def display_plan(plan):
 
 
 st.write("# Meal Plan")
-client_info = Client(height=height, weight=weight)
-client_info.dietary = list_to_markdown(st.session_state.traits)
+base_profile.dietary = list_to_markdown(st.session_state.traits)
 if submitted and not planned:
     with st.spinner("Planning..."):
-        plan = dietician.plan_meal(client_info)
+        plan = dietician.plan_meal(base_profile)
     st.session_state["plan"] = plan
     st.experimental_rerun()
 
@@ -147,7 +148,7 @@ if adjusting:
         for (day, meal), text in feedbacks.items():
             plan.daily_plan[day][meal].feedback = text
         with st.spinner("Adjusting..."):
-            new_plan = dietician.adjust_plan(client_info, plan)
+            new_plan = dietician.adjust_plan(base_profile, plan)
         st.session_state["plan"] = new_plan
         st.session_state["adjusting"] = False
         disable_feedbacks()
