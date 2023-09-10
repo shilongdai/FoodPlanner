@@ -1,9 +1,27 @@
 API_KEY_PATH = "./api_key"
-with open(API_KEY_PATH, "r") as fp:
-    API_KEY = fp.read().strip()
+VERBOSE = False
+TIMEOUT = 120
+MEAL_VALID_SYSTEM = "You are an AI assistant that determines if a combination of recipes taken together would be appropriate for a meal. " \
+                    "A combination of recipes is appropriate if and only if all recipes taken together can be a complete and standalone meal for breakfast, lunch, or dinner. " \
+                    "In addition to the conventional combinations, a combination can both be unconventional and appropriate if it fulfills a specific diet, such as keto or low-carb. " \
+                    "Only consider the combination given. Do not assume that anything besides the recipes listed would be a part of the meal. " \
+                    "Thus, assume that a side dish such as salad or rice would not be provided unless explicitly mentioned. " \
+                    "You must make a decision on whether the combination is appropriate or not. If it is difficult to determine, assume that it's not appropriate. " \
+                    "For each list of recipes, first give your thought process on determining whether it is appropriate, and then give your final response. "
+MEAL_VALID_FORMAT_SYSTEM = "You are an AI assistant that will format user inputs into json.\n{format_instructions}"
+MEAL_VALID_FORMAT_USER = "Format:\n{raw}"
+MEAL_VALID_USER = "Start of combination\n\n{recipes}\n\nEnd of combination\n\n"
+MEAL_VALID_RECIPE = "Name: {name}\nType: {type}"
+MEAL_VALID_DESC = "Whether the combination is appropriate"
+MEAL_VALID_REASON = "The exact copy of the thought process given"
+MEAL_VALID_TEMP = 0
+MEAL_VALID_MODEL = "gpt-3.5-turbo"
+MEAL_VALID_MAX_TOKENS = 1024 * 3
+MEAL_VALID_EXAMPLE_COL = "label_examples"
+
 THEME_TEMP = 0.3
 THEME_MODEL_OPENAI = "gpt-3.5-turbo"
-THEME_SYSTEM = "You are an experienced dietician and chief. " \
+THEME_SYSTEM = "You are an experienced dietician and meal planner. " \
                "Your goal is to create a meal plan for a client on a day to day basis. " \
                "The plan should include healthy and delicious food. " \
                "To create the plan, you will come up with up the general idea for the breakfast, lunch, and dinner for one day of the week. " \
@@ -34,7 +52,7 @@ CLIENT_PROFILE_SYSTEM = "The client has the following profile and description:\n
                         "Fat goal: {fat}g\n" \
                         "Dietary Considerations:\n{dietary}"
 
-ADJUST_SYSTEM = "You are an experienced dietician and chief. " \
+ADJUST_SYSTEM = "You are an experienced dietician and meal planner. " \
                 "Your goal is to create a meal plan for a client on a day to day basis. " \
                 "The plan should include healthy and delicious food, and have varieties over the days. " \
                 "To create the plan, you came up with up the general idea for the breakfast, lunch, and dinner for the week. " \
@@ -50,18 +68,14 @@ ADJUST_COMMAND = "The original plan:\n{orig_plan}\n\n" \
 ADJUST_MEAL_PLAN_TEMP = "Day: {day}\nMeal: {name}\nIdea: {idea}\nExplanation: {explanation}\n\n"
 TARGET_IDEA_TEMP = "{name} on {day}"
 
-RECIPE_SUGGEST_SYSTEM = "You are an experienced dietician and chief. " \
+RECIPE_SUGGEST_SYSTEM = "You are an experienced dietician and meal planner. " \
                         "Your goal is to create a meal plan for a client on a day to day basis. " \
                         "To create the plan, you came up with up the general idea for the breakfast, lunch, and dinner for the week. " \
-                        "Thus, for each of the ideas, you will think of possible recipes that will fit the meal idea. " \
-                        "Do not come up with a recipe on your own, only make some estimation about possible recipes created by others. " \
-                        "Only provide the expected name, calorie count, carbohydrate count in grams, fat count in grams, and protein count in grams for each recipes required for the meal. " \
+                        "Thus, for each of the ideas, you will think of at least 3 likely combinations of recipes that together would create the meal. " \
                         "The recipes should be easy to find in resources such as the internet, cookbooks etc. " \
                         "Thus, they should not be excessively obscure or specific so that the chance of finding the exact recipe is low. " \
-                        "Show your step by step thought process for how you came up with the name, calories, and nutrition information. " \
-                        "The thought process should be sufficient to serve as the proof for the accuracy of the recipe information. " \
-                        "Then, after providing the thought process, conclude with the final answer. " \
-                        "The final answer should contain pure numerical expected values of the estimates with appropriate units. "
+                        "Show your step by step thought process for how you came up with the combinations and the recipes in each combinations. " \
+                        "Then, after providing the thought process, provide the recipe combinations. "
 
 RECIPE_BUDGET_SYSTEM = "The client has the following caloric and macro-nutrient budget left for the day:\n" \
                        "Calories: {calories} cal\nCarbohydrate: {carbs}g\nProteins: {proteins}g\n" \
