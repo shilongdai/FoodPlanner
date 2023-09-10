@@ -22,6 +22,7 @@ from model import PromptAdoptingParser
 class RecipeMealInput(BaseModel):
     name: str
     type: str
+    ingredients: str
     id: int
 
 
@@ -43,7 +44,6 @@ class ChromaMealExampleSelector(BaseExampleSelector):
         raise NotImplementedError("Read only")
 
     def select_examples(self, input_variables: Dict[str, str]) -> List[dict]:
-        self.collection.query(query_texts=["Name: fried lobsters"], where={"valid": False}, n_results=1)
         fp_result = self.collection.query(query_texts=[input_variables["recipes"]], where={"classified": "fpos"},
                                           n_results=self.fpos)
         fn_result = self.collection.query(query_texts=[input_variables["recipes"]], where={"classified": "fneg"},
@@ -190,6 +190,7 @@ def evaluate_shuffle_recipes(model: BaseChatModel, recipes: Iterable[RecipeMealI
 
 if __name__ == "__main__":
     import random
+
     random.seed(93)
 
     data_src = "data/recipes.json"
@@ -203,7 +204,9 @@ if __name__ == "__main__":
         recipes_raw = json.load(fp)
         for idx, rec in enumerate(recipes_raw):
             recipes_list.append(RecipeMealInput(name=rec["recipe_name"],
-                                                type=", ".join(rec["cuisine_path"]), id=idx))
+                                                type=", ".join(rec["cuisine_path"]),
+                                                id=idx,
+                                                ingredients=rec["ingredients"].strip()))
     plan_llm = ChatOpenAI(openai_api_key=API_KEY, temperature=config.MEAL_VALID_TEMP,
                           model_name=config.MEAL_VALID_MODEL, model_kwargs=dict(timeout=config.TIMEOUT))
 
