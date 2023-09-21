@@ -1,23 +1,25 @@
 API_KEY_PATH = "./api_key"
 VERBOSE = False
 TIMEOUT = 120
-MEAL_VALID_SYSTEM = "You are an AI assistant that determines if a combination of recipes taken together would be appropriate for a meal. " \
-                    "A combination of recipes is appropriate if and only if all recipes taken together can be a complete and standalone meal for breakfast, lunch, or dinner. " \
-                    "In addition to the conventional combinations, a combination can both be unconventional and appropriate if it fulfills a specific diet, such as keto or low-carb. " \
+MEAL_VALID_SYSTEM = "You are an AI assistant that determines if a combination of recipes taken together would be appropriate. " \
+                    "A combination of recipes is appropriate if and only if all recipes taken together can be a standalone breakfast, lunch, or dinner. " \
+                    "Do not consider the nutritional values, but consider whether the recipes can complement each other in flavors or cuisines, or whether the recipes would make for a conventional combination. " \
                     "Only consider the combination given. Do not assume that anything besides the recipes listed would be a part of the meal. " \
                     "Thus, assume that a side dish such as salad or rice would not be provided unless explicitly mentioned. " \
-                    "You must make a decision on whether the combination is appropriate or not. If it is difficult to determine, assume that it's not appropriate. " \
                     "For each list of recipes, first give your thought process on determining whether it is appropriate, and then give your final response. "
 MEAL_VALID_FORMAT_SYSTEM = "You are an AI assistant that will format user inputs into json.\n{format_instructions}"
 MEAL_VALID_FORMAT_USER = "Format:\n{raw}"
-MEAL_VALID_USER = "Start of combination\n\n{recipes}\n\nEnd of combination\n\n"
+MEAL_VALID_USER = "Start of combination\n\n{recipes}\n\nEnd of combination\n\n"\
+                  "Is this combination an appropriate standalone breakfast, lunch or dinner?"
 MEAL_VALID_RECIPE = "Name: {name}\nType: {type}\nIngredients: {ingredients}"
-MEAL_VALID_DESC = "Whether the combination is appropriate"
+MEAL_VALID_DESC = "Whether the combination is appropriate for breakfast, lunch, or dinner"
 MEAL_VALID_REASON = "The exact copy of the thought process given"
+MEAL_VALID_REINFORCEMENT = "Excellent. "
 MEAL_VALID_TEMP = 0
 MEAL_VALID_MODEL = "gpt-3.5-turbo"
 MEAL_VALID_MAX_TOKENS = 1024 * 3
 MEAL_VALID_EXAMPLE_COL = "label_examples"
+MEAL_VALID_EXAMPLE_CHROMBA = "./data/meal_db"
 
 THEME_TEMP = 0.3
 THEME_MODEL_OPENAI = "gpt-3.5-turbo"

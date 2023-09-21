@@ -1,8 +1,10 @@
 from io import StringIO
+from typing import Iterable
 
 import streamlit as st
 import json
 import random
+from meal import RecipeMealInput
 
 SEED = 93
 TRUE_SAMPLE = 100
@@ -10,11 +12,12 @@ FALSE_SAMPLE = 100
 random.seed(SEED)
 
 
-def format_recipes(meal):
+def format_recipes(recipes: Iterable[RecipeMealInput]):
     result = []
-    for r in meal["recipes"]:
-        result.append("- %s" % r["name"])
-    return "\n".join(result)
+    format = "**Id**: {id}\n\n**Name**: {name}\n\n**Type**: {type}\n\n**Ingredients**: {ingredients}"
+    for r in recipes:
+        result.append(format.format(**r.dict()))
+    return "\n\n".join(result)
 
 
 @st.cache_data
@@ -45,7 +48,7 @@ if fpb:
 
     for i, s in enumerate(final_sample):
         st.write("## Recipe %d" % i)
-        st.write(format_recipes(s))
+        st.write(format_recipes([RecipeMealInput(**j) for j in s["recipes"]]))
         update_changed = False
         if "changed" not in s:
             s["changed"] = False

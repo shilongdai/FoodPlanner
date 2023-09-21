@@ -14,6 +14,7 @@ from langchain.prompts.example_selector.base import BaseExampleSelector
 from langchain.schema import OutputParserException, AIMessage
 from model import RandomExampleSelector
 from pydantic import BaseModel, Field
+import chromadb
 
 import config
 from model import PromptAdoptingParser
@@ -27,7 +28,7 @@ class RecipeMealInput(BaseModel):
 
 
 class MealValidOutput(BaseModel):
-    valid: bool = Field(description=config.MEAL_VALID_DESC)
+    valid: bool = Field(description=config.MEAL_VALID_DESC, default=False)
     thought: str = Field(description=config.MEAL_VALID_REASON)
 
 
@@ -75,12 +76,12 @@ def format_recipes(recipes: Iterable[RecipeMealInput]):
     return "\n\n".join(result)
 
 
-def create_appropriate_meal_examples(examples: Iterable[Dict[str, str]]):
+def create_appropriate_meal_examples(examples: Iterable[Dict[str, str]], reinforcement=config.MEAL_VALID_REINFORCEMENT):
     result = []
-    human_template = HumanMessagePromptTemplate.from_template(config.MEAL_VALID_USER)
+    human_template = HumanMessagePromptTemplate.from_template(reinforcement + config.MEAL_VALID_USER)
     ai_format = "Thought process:\n{thought}\n\nFinal response:\n{valid_response}"
-    valid_true = "The given combination is appropriate for a meal"
-    valid_false = "The given combination is not appropriate for a meal"
+    valid_true = "The given combination is appropriate for at least one of breakfast, lunch, or dinner"
+    valid_false = "The given combination is not appropriate for any of breakfast, lunch or dinner"
     for e in examples:
         result.append(human_template.format(recipes=e["recipes"]))
         if e["valid"]:
@@ -196,6 +197,7 @@ if __name__ == "__main__":
     data_src = "data/recipes.json"
     data_out = "data/meal-{date}.json".format(date=int(datetime.now().timestamp()))
     format_examples = "data/format_examples.json"
+
     with open(config.API_KEY_PATH, "r") as fp:
         API_KEY = fp.read().strip()
 
@@ -207,16 +209,22 @@ if __name__ == "__main__":
                                                 type=", ".join(rec["cuisine_path"]),
                                                 id=idx,
                                                 ingredients=rec["ingredients"].strip()))
-    plan_llm = ChatOpenAI(openai_api_key=API_KEY, temperature=config.MEAL_VALID_TEMP,
-                          model_name=config.MEAL_VALID_MODEL, model_kwargs=dict(timeout=config.TIMEOUT))
 
     with open(format_examples, "r") as fp:
         examples = json.load(fp)
         selector = RandomExampleSelector(examples, k=2)
 
+    chroma = chromadb.PersistentClient(config.MEAL_VALID_EXAMPLE_CHROMBA)
+    collection = chroma.get_or_create_collection(config.MEAL_VALID_EXAMPLE_COL)
+    collection.query(query_texts=["warm-up"], n_results=1)
+    meal_selector = ChromaMealExampleSelector(collection)
+
+    plan_llm = ChatOpenAI(openai_api_key=API_KEY, temperature=config.MEAL_VALID_TEMP,
+                          model_name=config.MEAL_VALID_MODEL, model_kwargs=dict(timeout=config.TIMEOUT))
     with open(data_out, "a") as fp:
         count = 0
-        for combo, valid in evaluate_shuffle_recipes(plan_llm, recipes_list, start=1, end=3, format_selector=selector):
+        for combo, valid in evaluate_shuffle_recipes(plan_llm, recipes_list, start=1, end=3, format_selector=selector,
+                                                     meal_selector=meal_selector):
             if count % 200 == 0:
                 print("Processed: " + str(count))
             meal_idea = {"recipes": [c.dict() for c in combo],
